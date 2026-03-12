@@ -524,8 +524,12 @@ def rand_name(length=8):
 
 def obfuscate_name(length=12):
     # Generate names that look like Luraph output: mix of l, I, 1
-    confusing = ['l', 'I', '1', 'O', '0']
-    return ''.join(random.choices(confusing, k=length))
+    # First char must be a letter (Lua identifiers cannot start with a digit)
+    first_chars = ['l', 'I', 'O']
+    rest_chars = ['l', 'I', '1', 'O', '0']
+    first = random.choice(first_chars)
+    rest = ''.join(random.choices(rest_chars, k=length - 1))
+    return first + rest
 
 
 def serialize_proto_to_lua(proto, vm_names, depth=0):
