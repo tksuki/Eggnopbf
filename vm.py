@@ -645,15 +645,15 @@ local {vm['execute']}
     elseif {vm['op']} == {Op.IDIV} then
       {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) // {vm['k']}({vm['c']})
     elseif {vm['op']} == {Op.BAND} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) & {vm['k']}({vm['c']})
+      {vm['stack']}[{vm['a']}] = bit32.band({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
     elseif {vm['op']} == {Op.BOR} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) | {vm['k']}({vm['c']})
+      {vm['stack']}[{vm['a']}] = bit32.bor({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
     elseif {vm['op']} == {Op.BXOR} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) ~ {vm['k']}({vm['c']})
+      {vm['stack']}[{vm['a']}] = bit32.bxor({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
     elseif {vm['op']} == {Op.SHL} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) << {vm['k']}({vm['c']})
+      {vm['stack']}[{vm['a']}] = bit32.lshift({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
     elseif {vm['op']} == {Op.SHR} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) >> {vm['k']}({vm['c']})
+      {vm['stack']}[{vm['a']}] = bit32.rshift({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
     elseif {vm['op']} == {Op.UNM} then
       {vm['stack']}[{vm['a']}] = -{vm['stack']}[{vm['b']}]
     elseif {vm['op']} == {Op.NOT} then
@@ -661,7 +661,7 @@ local {vm['execute']}
     elseif {vm['op']} == {Op.LEN} then
       {vm['stack']}[{vm['a']}] = #{vm['stack']}[{vm['b']}]
     elseif {vm['op']} == {Op.BNOT} then
-      {vm['stack']}[{vm['a']}] = ~{vm['stack']}[{vm['b']}]
+      {vm['stack']}[{vm['a']}] = bit32.bnot({vm['stack']}[{vm['b']}])
     elseif {vm['op']} == {Op.CONCAT} then
       local {vm['top']} = ""
       for {vm['i']}={vm['b']},{vm['c']} do {vm['top']}={vm['top']}..tostring({vm['stack']}[{vm['i']}]) end
