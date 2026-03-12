@@ -1,752 +1,744 @@
 """
-Custom VM - Luraph-style bytecode compiler and Lua VM runtime generator.
-Compiles Lua AST to custom bytecode, then wraps it in a Lua VM interpreter.
+VM Obfuscator - Stack-based VM with opcode shuffling and string obfuscation.
+Inspired by YAJU True VM Obfuscator v4.2 (Lua5.1/Luau compatible).
 """
 import random
 import string
-from parser import *  # 修正: from .parser import * -> from parser import *
+from parser import *
 
-# Opcodes
+# ── Opcodes ────────────────────────────────────────────────────────────────
 class Op:
-    LOADK    = 0
-    LOADNIL  = 1
-    LOADBOOL = 2
-    MOVE     = 3
-    GETGLOBAL= 4
-    SETGLOBAL= 5
-    GETTABLE = 6
-    SETTABLE = 7
-    NEWTABLE = 8
-    ADD      = 9
-    SUB      = 10
-    MUL      = 11
-    DIV      = 12
-    MOD      = 13
-    POW      = 14
-    UNM      = 15
-    NOT      = 16
-    LEN      = 17
-    CONCAT   = 18
-    JMP      = 19
-    EQ       = 20
-    LT       = 21
-    LE       = 22
-    TEST     = 23
-    TESTSET  = 24
-    CALL     = 25
-    TAILCALL = 26
-    RETURN   = 27
-    FORLOOP  = 28
-    FORPREP  = 29
-    TFORLOOP = 30
-    SETLIST  = 31
-    CLOSE    = 32
-    CLOSURE  = 33
-    VARARG   = 34
-    SELF     = 35
-    IDIV     = 36
-    BAND     = 37
-    BOR      = 38
-    BXOR     = 39
-    SHL      = 40
-    SHR      = 41
-    BNOT     = 42
-    GETUPVAL = 43
-    SETUPVAL = 44
-    GETTABUP = 45
-    SETTABUP = 46
+    PUSH_NIL    = 1
+    PUSH_TRUE   = 2
+    PUSH_FALSE  = 3
+    PUSH_NUM    = 4
+    PUSH_STR    = 5
+    PUSH_VAR    = 6
+    PUSH_GLOBAL = 7
+    POP         = 8
+    DUP         = 9
+    SWAP        = 10
+    ADJUST      = 11
+    SET_LOCAL   = 12
+    SET_GLOBAL  = 13
+    NEW_TABLE   = 14
+    GET_TABLE   = 15
+    SET_TABLE   = 16
+    GET_FIELD   = 17
+    SET_FIELD   = 18
+    ADD         = 19
+    SUB         = 20
+    MUL         = 21
+    DIV         = 22
+    MOD         = 23
+    POW         = 24
+    IDIV        = 25
+    UNM         = 26
+    NOT         = 27
+    LEN         = 28
+    BAND        = 29
+    BOR         = 30
+    BXOR        = 31
+    BNOT        = 32
+    SHL         = 33
+    SHR         = 34
+    CONCAT      = 35
+    EQ          = 36
+    NEQ         = 37
+    LT          = 38
+    GT          = 39
+    LEQ         = 40
+    GEQ         = 41
+    AND_JMP     = 42
+    OR_JMP      = 43
+    JMP         = 44
+    JMP_FALSE   = 45
+    JMP_TRUE    = 46
+    CALL        = 47
+    RETURN      = 48
+    CLOSURE     = 49
+    SETLIST     = 50
+    FORPREP     = 51
+    FORLOOP     = 52
+    GFORPREP    = 53
+    GFORLOOP    = 54
+    ENTER_SCOPE = 55
+    LEAVE_SCOPE = 56
+    PUSH_VARARG = 57
+    TAILCALL    = 58
 
-class Instruction:
-    def __init__(self, op, a=0, b=0, c=0, bx=0, sbx=0):
-        self.op = op
-        self.a = a
-        self.b = b
-        self.c = c
-        self.bx = bx
-        self.sbx = sbx
+MAX_OP = 58
 
+# ── Name / identifier generation ──────────────────────────────────────────
+_used_names = set()
+
+def obfuscate_name(length=None):
+    if length is None:
+        length = random.randint(10, 16)
+    first_chars = ['l', 'I', 'O']
+    rest_chars  = ['l', 'I', '1', 'O', '0']
+    while True:
+        name = random.choice(first_chars) + ''.join(random.choices(rest_chars, k=length - 1))
+        if name not in _used_names:
+            _used_names.add(name)
+            return name
+
+def reset_names():
+    _used_names.clear()
+
+# ── Number obfuscation ────────────────────────────────────────────────────
+def obf_number(n):
+    n = int(n)
+    if n == 0:
+        return "0"
+    r = random.randint(0, 2)
+    if r == 0:
+        a = random.randint(2, 40)
+        b = n // a
+        c = n - a * b
+        return f"({a}*{b}+{c})"
+    elif r == 1:
+        o = random.randint(5, 80)
+        return f"({n+o}-{o})"
+    else:
+        f = random.randint(2, 6)
+        q = n // f
+        c = n - f * q
+        return f"({f}*{q}+{c})"
+
+# ── String obfuscation ────────────────────────────────────────────────────
+def hide_str(s):
+    if not s:
+        return '""'
+    key = random.randint(3, 52)
+    enc = []
+    for i, ch in enumerate(s.encode('utf-8', errors='replace')):
+        enc.append((ch + key + (i % 7) * 3) % 255 + 1)
+    vt = obfuscate_name()
+    vr = obfuscate_name()
+    vi = obfuscate_name()
+    enc_str = ','.join(str(x) for x in enc)
+    return (
+        f"(function()"
+        f"local {vt}={{{enc_str}}};"
+        f"local {vr}={{}};"
+        f"for {vi}=1,#{vt} do "
+        f"{vr}[{vi}]=string.char(({vt}[{vi}]-1-{key}-{vi}%7*3+510)%255)"
+        f" end;"
+        f"return table.concat({vr})"
+        f"end)()"
+    )
+
+# ── Bytecode instruction ──────────────────────────────────────────────────
+class Instr:
+    def __init__(self, op, arg=0):
+        self.op  = op
+        self.arg = arg
+
+# ── Proto (function prototype) ────────────────────────────────────────────
 class Proto:
     def __init__(self):
-        self.instructions = []
-        self.constants = []
-        self.protos = []
-        self.upvalues = []
+        self.code   = []
+        self.consts = []
+        self.names  = []
+        self.funcs  = []
         self.params = 0
-        self.is_vararg = False
-        self.max_stack = 10
 
-    def add_const(self, val):
+    def add_const(self, v):
         try:
-            return self.constants.index(val)
+            return self.consts.index(v)
         except ValueError:
-            self.constants.append(val)
-            return len(self.constants) - 1
+            self.consts.append(v)
+            return len(self.consts) - 1
 
-    def emit(self, op, a=0, b=0, c=0, bx=0, sbx=0):
-        self.instructions.append(Instruction(op, a, b, c, bx, sbx))
-        return len(self.instructions) - 1
+    def add_name(self, n):
+        try:
+            return self.names.index(n)
+        except ValueError:
+            self.names.append(n)
+            return len(self.names) - 1
 
-    def patch_jump(self, idx, target):
-        self.instructions[idx].sbx = target - idx - 1
+    def emit(self, op, arg=0):
+        self.code.append(Instr(op, arg))
+        return len(self.code) - 1
 
+    def patch(self, idx, arg):
+        self.code[idx].arg = arg
 
+    def here(self):
+        return len(self.code)
+
+# ── Stack-based Compiler ──────────────────────────────────────────────────
 class Compiler:
     def __init__(self):
-        self.proto = None
-        self.reg = 0
-        self.locals = {}
-        self.local_stack = []
+        self.proto  = None
+        self.locals = []
+        self.scopes = []
 
     def compile(self, ast):
-        self.proto = Proto()
-        self.proto.is_vararg = True
-        self.reg = 0
-        self.locals = {}
-        self.local_stack = []
-        self.compile_block(ast)
-        self.proto.emit(Op.RETURN, 0, 1)
+        self.proto  = Proto()
+        self.locals = []
+        self.scopes = []
+        self._block(ast)
+        self.proto.emit(Op.RETURN, 0)
         return self.proto
 
-    def alloc_reg(self):
-        r = self.reg
-        self.reg += 1
-        if self.reg > self.proto.max_stack:
-            self.proto.max_stack = self.reg
-        return r
+    def _is_local(self, name):
+        return name in self.locals
 
-    def free_reg(self):
-        self.reg -= 1
+    def _push_scope(self):
+        self.scopes.append(len(self.locals))
+        self.proto.emit(Op.ENTER_SCOPE)
 
-    def push_scope(self):
-        self.local_stack.append(dict(self.locals))
+    def _pop_scope(self):
+        saved = self.scopes.pop()
+        del self.locals[saved:]
+        self.proto.emit(Op.LEAVE_SCOPE)
 
-    def pop_scope(self):
-        if self.local_stack:
-            self.locals = self.local_stack.pop()
+    def _N(self, name):
+        return self.proto.add_name(name)
 
-    def define_local(self, name):
-        r = self.alloc_reg()
-        self.locals[name] = r
-        return r
+    def _K(self, val):
+        return self.proto.add_const(val)
 
-    def resolve_local(self, name):
-        return self.locals.get(name, None)
-
-    def compile_block(self, block):
-        self.push_scope()
-        for stmt in block.stmts:
-            self.compile_stmt(stmt)
-        if block.ret:
-            self.compile_return(block.ret)
-        self.pop_scope()
-
-    def compile_stmt(self, stmt):
-        if isinstance(stmt, AssignStmt):
-            self.compile_assign(stmt)
-        elif isinstance(stmt, LocalStmt):
-            self.compile_local(stmt)
-        elif isinstance(stmt, CallStmt):
-            self.compile_call_stmt(stmt)
-        elif isinstance(stmt, DoStmt):
-            self.compile_block(stmt.block)
-        elif isinstance(stmt, WhileStmt):
-            self.compile_while(stmt)
-        elif isinstance(stmt, RepeatStmt):
-            self.compile_repeat(stmt)
-        elif isinstance(stmt, IfStmt):
-            self.compile_if(stmt)
-        elif isinstance(stmt, ForNumStmt):
-            self.compile_fornum(stmt)
-        elif isinstance(stmt, ForInStmt):
-            self.compile_forin(stmt)
-        elif isinstance(stmt, FuncStmt):
-            self.compile_func_stmt(stmt)
-        elif isinstance(stmt, LocalFuncStmt):
-            self.compile_local_func(stmt)
-        elif isinstance(stmt, ReturnStmt):
-            self.compile_return(stmt)
-        elif isinstance(stmt, BreakStmt):
-            pass  # handled by loop
-        elif isinstance(stmt, GotoStmt):
-            pass
-        elif isinstance(stmt, LabelStmt):
-            pass
-
-    def compile_return(self, stmt):
-        if not stmt.values:
-            self.proto.emit(Op.RETURN, 0, 1)
-            return
-        base = self.reg
-        for val in stmt.values:
-            r = self.alloc_reg()
-            self.compile_expr_to(val, r)
-        self.proto.emit(Op.RETURN, base, len(stmt.values) + 1)
-        for _ in stmt.values:
-            self.free_reg()
-
-    def compile_assign(self, stmt):
-        regs = []
-        for val in stmt.values:
-            r = self.alloc_reg()
-            self.compile_expr_to(val, r)
-            regs.append(r)
-        for i, target in enumerate(stmt.targets):
-            src = regs[i] if i < len(regs) else None
-            if src is None:
-                src = self.alloc_reg()
-                self.proto.emit(Op.LOADNIL, src, src)
-                regs.append(src)
-            self.compile_assign_target(target, src)
-        for r in reversed(regs):
-            self.free_reg()
-
-    def compile_assign_target(self, target, src):
-        if isinstance(target, NameExpr):
-            loc = self.resolve_local(target.name)
-            if loc is not None:
-                self.proto.emit(Op.MOVE, loc, src)
-            else:
-                k = self.proto.add_const(target.name)
-                self.proto.emit(Op.SETGLOBAL, src, bx=k)
-        elif isinstance(target, FieldExpr):
-            t = self.alloc_reg()
-            self.compile_expr_to(target.table, t)
-            k = self.proto.add_const(target.field)
-            self.proto.emit(Op.SETTABLE, t, 256 + k, src)
-            self.free_reg()
-        elif isinstance(target, IndexExpr):
-            t = self.alloc_reg()
-            self.compile_expr_to(target.table, t)
-            ki = self.alloc_reg()
-            self.compile_expr_to(target.key, ki)
-            self.proto.emit(Op.SETTABLE, t, ki, src)
-            self.free_reg()
-            self.free_reg()
-
-    def compile_local(self, stmt):
-        regs = []
-        for i, name in enumerate(stmt.names):
-            r = self.alloc_reg()
-            if i < len(stmt.values):
-                self.compile_expr_to(stmt.values[i], r)
-            else:
-                self.proto.emit(Op.LOADNIL, r, r)
-            regs.append(r)
-        for i, name in enumerate(stmt.names):
-            self.locals[name] = regs[i]
-
-    def compile_call_stmt(self, stmt):
-        r = self.alloc_reg()
-        self.compile_expr_to(stmt.expr, r)
-        self.free_reg()
-
-    def compile_while(self, stmt):
-        start = len(self.proto.instructions)
-        cond_reg = self.alloc_reg()
-        self.compile_expr_to(stmt.cond, cond_reg)
-        jmp = self.proto.emit(Op.TEST, cond_reg, 0, 0)
-        jmp2 = self.proto.emit(Op.JMP, 0, sbx=0)
-        self.free_reg()
-        self.compile_block(stmt.block)
-        back = self.proto.emit(Op.JMP, 0, sbx=start - len(self.proto.instructions) - 1)
-        self.proto.patch_jump(jmp2, len(self.proto.instructions))
-
-    def compile_repeat(self, stmt):
-        start = len(self.proto.instructions)
-        self.compile_block(stmt.block)
-        cond_reg = self.alloc_reg()
-        self.compile_expr_to(stmt.cond, cond_reg)
-        self.proto.emit(Op.TEST, cond_reg, 0, 0)
-        self.proto.emit(Op.JMP, 0, sbx=start - len(self.proto.instructions) - 1)
-        self.free_reg()
-
-    def compile_if(self, stmt):
-        exits = []
-        cond_reg = self.alloc_reg()
-        self.compile_expr_to(stmt.cond, cond_reg)
-        jmp_false = self.proto.emit(Op.TEST, cond_reg, 0, 0)
-        jmp_skip = self.proto.emit(Op.JMP, 0, sbx=0)
-        self.free_reg()
-        self.compile_block(stmt.then_block)
-        exits.append(self.proto.emit(Op.JMP, 0, sbx=0))
-        self.proto.patch_jump(jmp_skip, len(self.proto.instructions))
-        for (ec, eb) in stmt.elseifs:
-            cr = self.alloc_reg()
-            self.compile_expr_to(ec, cr)
-            jf = self.proto.emit(Op.TEST, cr, 0, 0)
-            js = self.proto.emit(Op.JMP, 0, sbx=0)
-            self.free_reg()
-            self.compile_block(eb)
-            exits.append(self.proto.emit(Op.JMP, 0, sbx=0))
-            self.proto.patch_jump(js, len(self.proto.instructions))
-        if stmt.else_block:
-            self.compile_block(stmt.else_block)
-        for e in exits:
-            self.proto.patch_jump(e, len(self.proto.instructions))
-
-    def compile_fornum(self, stmt):
-        base = self.reg
-        r_init = self.alloc_reg()
-        r_limit = self.alloc_reg()
-        r_step = self.alloc_reg()
-        r_var = self.alloc_reg()
-        self.compile_expr_to(stmt.start, r_init)
-        self.compile_expr_to(stmt.stop, r_limit)
-        if stmt.step:
-            self.compile_expr_to(stmt.step, r_step)
+    def _push_var(self, name):
+        if self._is_local(name):
+            self.proto.emit(Op.PUSH_VAR, self._N(name))
         else:
-            k = self.proto.add_const(1)
-            self.proto.emit(Op.LOADK, r_step, bx=k)
-        prep = self.proto.emit(Op.FORPREP, base, sbx=0)
-        self.locals[stmt.name] = r_var
-        self.compile_block(stmt.block)
-        loop = self.proto.emit(Op.FORLOOP, base, sbx=0)
-        self.proto.patch_jump(prep, loop)
-        self.proto.patch_jump(loop, prep + 1)
-        self.reg = base
+            self.proto.emit(Op.PUSH_GLOBAL, self._N(name))
 
-    def compile_forin(self, stmt):
-        base = self.reg
-        r_iter = self.alloc_reg()
-        r_state = self.alloc_reg()
-        r_ctrl = self.alloc_reg()
-        if stmt.iters:
-            self.compile_expr_to(stmt.iters[0], r_iter)
-        if len(stmt.iters) > 1:
-            self.compile_expr_to(stmt.iters[1], r_state)
-        if len(stmt.iters) > 2:
-            self.compile_expr_to(stmt.iters[2], r_ctrl)
-        jmp = self.proto.emit(Op.JMP, 0, sbx=0)
-        loop_start = len(self.proto.instructions)
-        var_regs = []
-        for name in stmt.names:
-            r = self.alloc_reg()
-            self.locals[name] = r
-            var_regs.append(r)
-        self.compile_block(stmt.block)
-        self.proto.patch_jump(jmp, len(self.proto.instructions))
-        self.proto.emit(Op.TFORLOOP, base, c=len(stmt.names))
-        self.proto.emit(Op.JMP, 0, sbx=loop_start - len(self.proto.instructions) - 1)
-        self.reg = base
+    def _set_var(self, name):
+        if self._is_local(name):
+            self.proto.emit(Op.SET_LOCAL, self._N(name))
+        else:
+            self.proto.emit(Op.SET_GLOBAL, self._N(name))
 
-    def compile_func_stmt(self, stmt):
-        sub = self.compile_func(stmt.params, stmt.has_vararg, stmt.block)
-        idx = len(self.proto.protos)
-        self.proto.protos.append(sub)
-        r = self.alloc_reg()
-        self.proto.emit(Op.CLOSURE, r, bx=idx)
+    def _block(self, block):
+        self._push_scope()
+        for stmt in block.stmts:
+            self._stmt(stmt)
+        if block.ret:
+            self._return(block.ret)
+        self._pop_scope()
+
+    def _stmt(self, stmt):
+        if   isinstance(stmt, AssignStmt):    self._assign(stmt)
+        elif isinstance(stmt, LocalStmt):     self._local(stmt)
+        elif isinstance(stmt, CallStmt):      self._call_stmt(stmt)
+        elif isinstance(stmt, DoStmt):        self._block(stmt.block)
+        elif isinstance(stmt, WhileStmt):     self._while(stmt)
+        elif isinstance(stmt, RepeatStmt):    self._repeat(stmt)
+        elif isinstance(stmt, IfStmt):        self._if(stmt)
+        elif isinstance(stmt, ForNumStmt):    self._fornum(stmt)
+        elif isinstance(stmt, ForInStmt):     self._forin(stmt)
+        elif isinstance(stmt, FuncStmt):      self._func_stmt(stmt)
+        elif isinstance(stmt, LocalFuncStmt): self._local_func(stmt)
+        elif isinstance(stmt, ReturnStmt):    self._return(stmt)
+        elif isinstance(stmt, BreakStmt):     pass
+        elif isinstance(stmt, GotoStmt):      pass
+        elif isinstance(stmt, LabelStmt):     pass
+
+    def _return(self, stmt):
+        n = len(stmt.values)
+        for v in stmt.values:
+            self._expr(v)
+        self.proto.emit(Op.RETURN, n)
+
+    def _assign(self, stmt):
+        n_lhs = len(stmt.targets)
+        n_rhs = len(stmt.values)
+        for v in stmt.values:
+            self._expr(v)
+        if n_rhs != n_lhs:
+            self.proto.emit(Op.ADJUST, n_lhs)
+        for tgt in reversed(stmt.targets):
+            self._assign_target(tgt)
+
+    def _assign_target(self, tgt):
+        if isinstance(tgt, NameExpr):
+            self._set_var(tgt.name)
+        elif isinstance(tgt, FieldExpr):
+            self._expr(tgt.table)
+            self.proto.emit(Op.SET_FIELD, self._N(tgt.field))
+        elif isinstance(tgt, IndexExpr):
+            self._expr(tgt.table)
+            self._expr(tgt.key)
+            self.proto.emit(Op.SET_TABLE)
+
+    def _local(self, stmt):
+        n = len(stmt.names)
+        for i, nm in enumerate(stmt.names):
+            if i < len(stmt.values):
+                self._expr(stmt.values[i])
+            else:
+                self.proto.emit(Op.PUSH_NIL)
+        if len(stmt.values) != n:
+            self.proto.emit(Op.ADJUST, n)
+        for nm in reversed(stmt.names):
+            self.locals.append(nm)
+            self.proto.emit(Op.SET_LOCAL, self._N(nm))
+
+    def _call_stmt(self, stmt):
+        self._expr(stmt.expr)
+        self.proto.emit(Op.POP)
+
+    def _while(self, stmt):
+        ls = self.proto.here()
+        self._expr(stmt.cond)
+        jf = self.proto.emit(Op.JMP_FALSE, 0)
+        self._block(stmt.block)
+        self.proto.emit(Op.JMP, ls - self.proto.here() - 1)
+        self.proto.patch(jf, self.proto.here() - jf)
+
+    def _repeat(self, stmt):
+        ls = self.proto.here()
+        self._block(stmt.block)
+        self._expr(stmt.cond)
+        self.proto.emit(Op.JMP_FALSE, ls - self.proto.here() - 1)
+
+    def _if(self, stmt):
+        self._expr(stmt.cond)
+        jf = self.proto.emit(Op.JMP_FALSE, 0)
+        self._block(stmt.then_block)
+        exits = [self.proto.emit(Op.JMP, 0)]
+        self.proto.patch(jf, self.proto.here() - jf)
+        for (ec, eb) in stmt.elseifs:
+            self._expr(ec)
+            jf2 = self.proto.emit(Op.JMP_FALSE, 0)
+            self._block(eb)
+            exits.append(self.proto.emit(Op.JMP, 0))
+            self.proto.patch(jf2, self.proto.here() - jf2)
+        if stmt.else_block:
+            self._block(stmt.else_block)
+        for e in exits:
+            self.proto.patch(e, self.proto.here() - e)
+
+    def _fornum(self, stmt):
+        self._expr(stmt.start)
+        self._expr(stmt.stop)
+        if stmt.step:
+            self._expr(stmt.step)
+        else:
+            self.proto.emit(Op.PUSH_NUM, self._K(1.0))
+        fp = self.proto.emit(Op.FORPREP, 0)
+        self.locals.append(stmt.name)
+        lb = self.proto.here()
+        self._block(stmt.block)
+        self.proto.emit(Op.FORLOOP, lb - self.proto.here() - 1)
+        self.proto.patch(fp, self.proto.here() - fp)
+        self.locals.remove(stmt.name)
+
+    def _forin(self, stmt):
+        for it in stmt.iters:
+            self._expr(it)
+        for _ in range(3 - len(stmt.iters)):
+            self.proto.emit(Op.PUSH_NIL)
+        gfp = self.proto.emit(Op.GFORPREP, 0)
+        for nm in stmt.names:
+            self.locals.append(nm)
+        lb = self.proto.here()
+        self._block(stmt.block)
+        self.proto.emit(Op.GFORLOOP, lb - self.proto.here() - 1)
+        self.proto.patch(gfp, self.proto.here() - gfp)
+        for nm in stmt.names:
+            if nm in self.locals:
+                self.locals.remove(nm)
+
+    def _func_stmt(self, stmt):
+        fi = self._compile_func(stmt.params, stmt.has_vararg, stmt.block)
+        self.proto.emit(Op.CLOSURE, fi)
         name = '.'.join(stmt.name)
         if stmt.method:
             name += ':' + stmt.method
-        k = self.proto.add_const(name)
-        self.proto.emit(Op.SETGLOBAL, r, bx=k)
-        self.free_reg()
+        self._set_var(name)
 
-    def compile_local_func(self, stmt):
-        r = self.define_local(stmt.name)
-        sub = self.compile_func(stmt.params, stmt.has_vararg, stmt.block)
-        idx = len(self.proto.protos)
-        self.proto.protos.append(sub)
-        self.proto.emit(Op.CLOSURE, r, bx=idx)
+    def _local_func(self, stmt):
+        self.locals.append(stmt.name)
+        fi = self._compile_func(stmt.params, stmt.has_vararg, stmt.block)
+        self.proto.emit(Op.CLOSURE, fi)
+        self.proto.emit(Op.SET_LOCAL, self._N(stmt.name))
 
-    def compile_func(self, params, has_vararg, block):
-        old_proto = self.proto
-        old_reg = self.reg
-        old_locals = self.locals
-        old_stack = self.local_stack
-        self.proto = Proto()
-        self.proto.params = len(params)
-        self.proto.is_vararg = has_vararg
-        self.reg = 0
-        self.locals = {}
-        self.local_stack = []
-        for p in params:
-            self.locals[p] = self.alloc_reg()
-        self.compile_block(block)
-        self.proto.emit(Op.RETURN, 0, 1)
-        result = self.proto
-        self.proto = old_proto
-        self.reg = old_reg
-        self.locals = old_locals
-        self.local_stack = old_stack
-        return result
+    def _compile_func(self, params, has_vararg, block):
+        sub = Compiler()
+        sub.proto        = Proto()
+        sub.proto.params = len(params)
+        sub.locals       = list(params)
+        sub.scopes       = []
+        sub._block(block)
+        sub.proto.emit(Op.RETURN, 0)
+        self.proto.funcs.append(sub.proto)
+        return len(self.proto.funcs) - 1
 
-    def compile_expr_to(self, expr, reg):
+    def _expr(self, expr):
         if isinstance(expr, NumberExpr):
-            k = self.proto.add_const(float(expr.value.replace('_', '')))
-            self.proto.emit(Op.LOADK, reg, bx=k)
+            v = float(expr.value.replace('_', ''))
+            self.proto.emit(Op.PUSH_NUM, self._K(v))
         elif isinstance(expr, StringExpr):
-            k = self.proto.add_const(expr.value)
-            self.proto.emit(Op.LOADK, reg, bx=k)
+            self.proto.emit(Op.PUSH_STR, self._K(expr.value))
         elif isinstance(expr, BoolExpr):
-            self.proto.emit(Op.LOADBOOL, reg, 1 if expr.value else 0)
+            self.proto.emit(Op.PUSH_TRUE if expr.value else Op.PUSH_FALSE)
         elif isinstance(expr, NilExpr):
-            self.proto.emit(Op.LOADNIL, reg, reg)
+            self.proto.emit(Op.PUSH_NIL)
         elif isinstance(expr, VarArgExpr):
-            self.proto.emit(Op.VARARG, reg, 0)
+            self.proto.emit(Op.PUSH_VARARG)
         elif isinstance(expr, NameExpr):
-            loc = self.resolve_local(expr.name)
-            if loc is not None:
-                self.proto.emit(Op.MOVE, reg, loc)
-            else:
-                k = self.proto.add_const(expr.name)
-                self.proto.emit(Op.GETGLOBAL, reg, bx=k)
+            self._push_var(expr.name)
         elif isinstance(expr, FieldExpr):
-            t = self.alloc_reg()
-            self.compile_expr_to(expr.table, t)
-            k = self.proto.add_const(expr.field)
-            self.proto.emit(Op.GETTABLE, reg, t, 256 + k)
-            self.free_reg()
+            self._expr(expr.table)
+            self.proto.emit(Op.GET_FIELD, self._N(expr.field))
         elif isinstance(expr, IndexExpr):
-            t = self.alloc_reg()
-            self.compile_expr_to(expr.table, t)
-            ki = self.alloc_reg()
-            self.compile_expr_to(expr.key, ki)
-            self.proto.emit(Op.GETTABLE, reg, t, ki)
-            self.free_reg()
-            self.free_reg()
+            self._expr(expr.table)
+            self._expr(expr.key)
+            self.proto.emit(Op.GET_TABLE)
         elif isinstance(expr, BinOpExpr):
-            self.compile_binop(expr, reg)
+            self._binop(expr)
         elif isinstance(expr, UnOpExpr):
-            self.compile_unop(expr, reg)
+            self._unop(expr)
         elif isinstance(expr, CallExpr):
-            self.compile_call(expr, reg)
+            self._call_expr(expr)
         elif isinstance(expr, MethodCallExpr):
-            self.compile_method_call(expr, reg)
+            self._method_call(expr)
         elif isinstance(expr, FuncExpr):
-            sub = self.compile_func(expr.params, expr.has_vararg, expr.block)
-            idx = len(self.proto.protos)
-            self.proto.protos.append(sub)
-            self.proto.emit(Op.CLOSURE, reg, bx=idx)
+            fi = self._compile_func(expr.params, expr.has_vararg, expr.block)
+            self.proto.emit(Op.CLOSURE, fi)
         elif isinstance(expr, TableExpr):
-            self.compile_table(expr, reg)
+            self._table(expr)
 
-    def compile_binop(self, expr, reg):
+    def _binop(self, expr):
         op_map = {
             '+': Op.ADD, '-': Op.SUB, '*': Op.MUL, '/': Op.DIV,
-            '%': Op.MOD, '^': Op.POW, '//': Op.IDIV,
+            '%': Op.MOD, '^': Op.POW, '//': Op.IDIV, '..': Op.CONCAT,
             '&': Op.BAND, '|': Op.BOR, '~': Op.BXOR,
-            '<<': Op.SHL, '>>': Op.SHR, '..': Op.CONCAT,
+            '<<': Op.SHL, '>>': Op.SHR,
+            '==': Op.EQ, '~=': Op.NEQ, '<': Op.LT, '>': Op.GT,
+            '<=': Op.LEQ, '>=': Op.GEQ,
         }
-        cmp_map = {'==': Op.EQ, '~=': Op.EQ, '<': Op.LT, '>': Op.LT,
-                   '<=': Op.LE, '>=': Op.LE}
-        if expr.op in op_map:
-            l = self.alloc_reg()
-            r = self.alloc_reg()
-            self.compile_expr_to(expr.left, l)
-            self.compile_expr_to(expr.right, r)
-            self.proto.emit(op_map[expr.op], reg, l, r)
-            self.free_reg()
-            self.free_reg()
-        elif expr.op in cmp_map:
-            l = self.alloc_reg()
-            r = self.alloc_reg()
-            self.compile_expr_to(expr.left, l)
-            self.compile_expr_to(expr.right, r)
-            inv = 1 if expr.op in ('~=', '>', '>=') else 0
-            if expr.op in ('>', '>='):
-                l, r = r, l
-            self.proto.emit(cmp_map[expr.op], inv, l, r)
-            self.proto.emit(Op.JMP, 0, sbx=1)
-            self.proto.emit(Op.LOADBOOL, reg, 0, 1)
-            self.proto.emit(Op.LOADBOOL, reg, 1, 0)
-            self.free_reg()
-            self.free_reg()
-        elif expr.op == 'and':
-            self.compile_expr_to(expr.left, reg)
-            j = self.proto.emit(Op.TESTSET, reg, reg, 0)
-            jmp = self.proto.emit(Op.JMP, 0, sbx=0)
-            self.compile_expr_to(expr.right, reg)
-            self.proto.patch_jump(jmp, len(self.proto.instructions))
+        if expr.op == 'and':
+            self._expr(expr.left)
+            j = self.proto.emit(Op.AND_JMP, 0)
+            self._expr(expr.right)
+            self.proto.patch(j, self.proto.here() - j)
         elif expr.op == 'or':
-            self.compile_expr_to(expr.left, reg)
-            j = self.proto.emit(Op.TESTSET, reg, reg, 1)
-            jmp = self.proto.emit(Op.JMP, 0, sbx=0)
-            self.compile_expr_to(expr.right, reg)
-            self.proto.patch_jump(jmp, len(self.proto.instructions))
-
-    def compile_unop(self, expr, reg):
-        op_map = {'-': Op.UNM, 'not': Op.NOT, '#': Op.LEN, '~': Op.BNOT}
-        r = self.alloc_reg()
-        self.compile_expr_to(expr.operand, r)
-        self.proto.emit(op_map.get(expr.op, Op.UNM), reg, r)
-        self.free_reg()
-
-    def compile_call(self, expr, reg):
-        f = self.alloc_reg()
-        self.compile_expr_to(expr.func, f)
-        for arg in expr.args:
-            ar = self.alloc_reg()
-            self.compile_expr_to(arg, ar)
-        self.proto.emit(Op.CALL, f, len(expr.args) + 1, 2)
-        self.proto.emit(Op.MOVE, reg, f)
-        for _ in expr.args:
-            self.free_reg()
-        self.free_reg()
-
-    def compile_method_call(self, expr, reg):
-        obj = self.alloc_reg()
-        self.compile_expr_to(expr.obj, obj)
-        k = self.proto.add_const(expr.method)
-        method_reg = self.alloc_reg()
-        self.proto.emit(Op.SELF, obj, obj, 256 + k)
-        for arg in expr.args:
-            ar = self.alloc_reg()
-            self.compile_expr_to(arg, ar)
-        self.proto.emit(Op.CALL, obj, len(expr.args) + 2, 2)
-        self.proto.emit(Op.MOVE, reg, obj)
-        for _ in expr.args:
-            self.free_reg()
-        self.free_reg()
-        self.free_reg()
-
-    def compile_table(self, expr, reg):
-        self.proto.emit(Op.NEWTABLE, reg, 0, 0)
-        for i, field in enumerate(expr.fields):
-            vr = self.alloc_reg()
-            self.compile_expr_to(field.value, vr)
-            if field.key is None:
-                k = self.proto.add_const(i + 1)
-                self.proto.emit(Op.SETTABLE, reg, 256 + k, vr)
-            else:
-                kr = self.alloc_reg()
-                self.compile_expr_to(field.key, kr)
-                self.proto.emit(Op.SETTABLE, reg, kr, vr)
-                self.free_reg()
-            self.free_reg()
-
-
-def rand_name(length=8):
-    chars = string.ascii_letters + string.digits
-    first = random.choice(string.ascii_letters + '_')
-    rest = ''.join(random.choices(chars + '_', k=length - 1))
-    return first + rest
-
-def obfuscate_name(length=12):
-    # Generate names that look like Luraph output: mix of l, I, 1
-    # First char must be a letter (Lua identifiers cannot start with a digit)
-    first_chars = ['l', 'I', 'O']
-    rest_chars = ['l', 'I', '1', 'O', '0']
-    first = random.choice(first_chars)
-    rest = ''.join(random.choices(rest_chars, k=length - 1))
-    return first + rest
-
-
-def serialize_proto_to_lua(proto, vm_names, depth=0):
-    """Serialize a Proto to a Lua table literal for the VM"""
-    instr_parts = []
-    for ins in proto.instructions:
-        instr_parts.append(f"{{{ins.op},{ins.a},{ins.b},{ins.c},{ins.bx},{ins.sbx}}}")
-    
-    const_parts = []
-    for c in proto.constants:
-        if isinstance(c, str):
-            escaped = c.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\0', '\\0')
-            const_parts.append(f'"{escaped}"')
-        elif isinstance(c, float):
-            const_parts.append(repr(c))
-        elif c is None:
-            const_parts.append('false')
+            self._expr(expr.left)
+            j = self.proto.emit(Op.OR_JMP, 0)
+            self._expr(expr.right)
+            self.proto.patch(j, self.proto.here() - j)
         else:
-            const_parts.append(str(c))
-    
-    sub_parts = []
-    for sub in proto.protos:
-        sub_parts.append(serialize_proto_to_lua(sub, vm_names, depth + 1))
-    
+            self._expr(expr.left)
+            self._expr(expr.right)
+            self.proto.emit(op_map.get(expr.op, Op.ADD))
+
+    def _unop(self, expr):
+        op_map = {'-': Op.UNM, 'not': Op.NOT, '#': Op.LEN, '~': Op.BNOT}
+        self._expr(expr.operand)
+        self.proto.emit(op_map.get(expr.op, Op.UNM))
+
+    def _call_expr(self, expr):
+        self._expr(expr.func)
+        for a in expr.args:
+            self._expr(a)
+        self.proto.emit(Op.CALL, len(expr.args))
+
+    def _method_call(self, expr):
+        self._expr(expr.obj)
+        self.proto.emit(Op.DUP)
+        self.proto.emit(Op.GET_FIELD, self._N(expr.method))
+        self.proto.emit(Op.SWAP)
+        for a in expr.args:
+            self._expr(a)
+        self.proto.emit(Op.CALL, len(expr.args) + 1)
+
+    def _table(self, expr):
+        self.proto.emit(Op.NEW_TABLE)
+        idx = 0
+        for field in expr.fields:
+            if field.key is None:
+                idx += 1
+                self._expr(field.value)
+                self.proto.emit(Op.SETLIST, idx)
+            elif isinstance(field.key, StringExpr):
+                self._expr(field.value)
+                self.proto.emit(Op.SET_FIELD, self._N(field.key.value))
+            else:
+                self._expr(field.key)
+                self._expr(field.value)
+                self.proto.emit(Op.SET_TABLE)
+
+
+# ── Opcode shuffling ──────────────────────────────────────────────────────
+def make_opcode_map():
+    pool = list(range(1, MAX_OP + 1))
+    random.shuffle(pool)
+    op2c = {}
+    c2op = {}
+    for orig, scr in enumerate(pool, 1):
+        op2c[orig] = scr
+        c2op[scr]  = orig
+    return op2c, c2op
+
+def remap_proto(proto, op2c):
+    for ins in proto.code:
+        ins.op = op2c.get(ins.op, ins.op)
+    for sub in proto.funcs:
+        remap_proto(sub, op2c)
+
+
+# ── Serializer ────────────────────────────────────────────────────────────
+def serialize_proto(proto):
+    k_parts = []
+    for c in proto.consts:
+        if isinstance(c, str):
+            k_parts.append(hide_str(c))
+        elif isinstance(c, float):
+            iv = int(c)
+            if c == iv and abs(iv) < 10**12:
+                k_parts.append(obf_number(iv))
+            else:
+                k_parts.append(repr(c))
+        else:
+            k_parts.append(str(c))
+
+    n_parts = [hide_str(n) for n in proto.names]
+    c_parts = [f"{{{obf_number(ins.op)},{obf_number(ins.arg)}}}" for ins in proto.code]
+    f_parts = [serialize_proto(sub) for sub in proto.funcs]
+
     return (
-        f"{{{vm_names['instructions']}={{{','.join(instr_parts)}}},"
-        f"{vm_names['constants']}={{{','.join(const_parts)}}},"
-        f"{vm_names['protos']}={{{','.join(sub_parts)}}},"
-        f"{vm_names['params']}={proto.params},"
-        f"{vm_names['is_vararg']}={'true' if proto.is_vararg else 'false'},"
-        f"{vm_names['max_stack']}={proto.max_stack}}}"
+        f"{{k={{{','.join(k_parts)}}},"
+        f"n={{{','.join(n_parts)}}},"
+        f"c={{{','.join(c_parts)}}},"
+        f"f={{{','.join(f_parts)}}},"
+        f"p={proto.params}}}"
     )
 
 
+# ── VM runtime generator ──────────────────────────────────────────────────
 def generate_vm_lua(proto):
-    """Generate full obfuscated VM + bytecode as Lua source"""
-    # Generate random names for VM internals
-    vm = {n: obfuscate_name(random.randint(8, 14)) for n in [
-        'execute', 'wrap', 'stack', 'pc', 'upvals', 'env',
-        'instructions', 'constants', 'protos', 'params', 'is_vararg', 'max_stack',
-        'ins', 'op', 'a', 'b', 'c', 'bx', 'sbx',
-        'proto', 'func', 'args', 'results', 'i', 'k', 'v',
-        'top', 'base', 'closure', 'self_ref'
-    ]}
-    
-    bytecode = serialize_proto_to_lua(proto, vm)
-    
-    # XOR-encrypt the bytecode string with a random key
-    key = random.randint(1, 255)
-    
-    # Build the VM runtime in Lua
-    lua_vm = f"""-- [[ VM RUNTIME ]]
-local {vm['execute']}
-{vm['execute']} = function({vm['proto']}, {vm['env']}, ...)
-  local {vm['stack']} = {{}}
-  local {vm['pc']} = 1
-  local {vm['upvals']} = {{}}
-  local {vm['instructions']} = {vm['proto']}.{vm['instructions']}
-  local {vm['constants']} = {vm['proto']}.{vm['constants']}
-  local {vm['protos']} = {vm['proto']}.{vm['protos']}
-  -- Load params
-  local {vm['args']} = {{...}}
-  for {vm['i']} = 1, {vm['proto']}.{vm['params']} do
-    {vm['stack']}[{vm['i']}] = {vm['args']}[{vm['i']}]
-  end
-  if {vm['proto']}.{vm['is_vararg']} then
-    {vm['stack']}[0] = {vm['args']}
-  end
-  local function {vm['k']}({vm['v']})
-    if {vm['v']} >= 256 then return {vm['constants']}[{vm['v']}-255] end
-    return {vm['stack']}[{vm['v']}]
-  end
-  while true do
-    local {vm['ins']} = {vm['instructions']}[{vm['pc']}]
-    local {vm['op']} = {vm['ins']}[1]
-    local {vm['a']} = {vm['ins']}[2]
-    local {vm['b']} = {vm['ins']}[3]
-    local {vm['c']} = {vm['ins']}[4]
-    local {vm['bx']} = {vm['ins']}[5]
-    local {vm['sbx']} = {vm['ins']}[6]
-    {vm['pc']} = {vm['pc']} + 1
-    if {vm['op']} == {Op.LOADK} then
-      {vm['stack']}[{vm['a']}] = {vm['constants']}[{vm['bx']}+1]
-    elseif {vm['op']} == {Op.LOADNIL} then
-      for {vm['i']}={vm['a']},{vm['b']} do {vm['stack']}[{vm['i']}]=nil end
-    elseif {vm['op']} == {Op.LOADBOOL} then
-      {vm['stack']}[{vm['a']}] = ({vm['b']}~=0)
-      if {vm['c']}~=0 then {vm['pc']}={vm['pc']}+1 end
-    elseif {vm['op']} == {Op.MOVE} then
-      {vm['stack']}[{vm['a']}] = {vm['stack']}[{vm['b']}]
-    elseif {vm['op']} == {Op.GETGLOBAL} then
-      {vm['stack']}[{vm['a']}] = {vm['env']}[{vm['constants']}[{vm['bx']}+1]]
-    elseif {vm['op']} == {Op.SETGLOBAL} then
-      {vm['env']}[{vm['constants']}[{vm['bx']}+1]] = {vm['stack']}[{vm['a']}]
-    elseif {vm['op']} == {Op.GETTABLE} then
-      {vm['stack']}[{vm['a']}] = {vm['stack']}[{vm['b']}][{vm['k']}({vm['c']})]
-    elseif {vm['op']} == {Op.SETTABLE} then
-      {vm['stack']}[{vm['a']}][{vm['k']}({vm['b']})] = {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.NEWTABLE} then
-      {vm['stack']}[{vm['a']}] = {{}}
-    elseif {vm['op']} == {Op.ADD} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) + {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.SUB} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) - {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.MUL} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) * {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.DIV} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) / {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.MOD} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) % {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.POW} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) ^ {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.IDIV} then
-      {vm['stack']}[{vm['a']}] = {vm['k']}({vm['b']}) // {vm['k']}({vm['c']})
-    elseif {vm['op']} == {Op.BAND} then
-      {vm['stack']}[{vm['a']}] = bit32.band({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
-    elseif {vm['op']} == {Op.BOR} then
-      {vm['stack']}[{vm['a']}] = bit32.bor({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
-    elseif {vm['op']} == {Op.BXOR} then
-      {vm['stack']}[{vm['a']}] = bit32.bxor({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
-    elseif {vm['op']} == {Op.SHL} then
-      {vm['stack']}[{vm['a']}] = bit32.lshift({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
-    elseif {vm['op']} == {Op.SHR} then
-      {vm['stack']}[{vm['a']}] = bit32.rshift({vm['k']}({vm['b']}), {vm['k']}({vm['c']}))
-    elseif {vm['op']} == {Op.UNM} then
-      {vm['stack']}[{vm['a']}] = -{vm['stack']}[{vm['b']}]
-    elseif {vm['op']} == {Op.NOT} then
-      {vm['stack']}[{vm['a']}] = not {vm['stack']}[{vm['b']}]
-    elseif {vm['op']} == {Op.LEN} then
-      {vm['stack']}[{vm['a']}] = #{vm['stack']}[{vm['b']}]
-    elseif {vm['op']} == {Op.BNOT} then
-      {vm['stack']}[{vm['a']}] = bit32.bnot({vm['stack']}[{vm['b']}])
-    elseif {vm['op']} == {Op.CONCAT} then
-      local {vm['top']} = ""
-      for {vm['i']}={vm['b']},{vm['c']} do {vm['top']}={vm['top']}..tostring({vm['stack']}[{vm['i']}]) end
-      {vm['stack']}[{vm['a']}] = {vm['top']}
-    elseif {vm['op']} == {Op.JMP} then
-      {vm['pc']} = {vm['pc']} + {vm['sbx']}
-    elseif {vm['op']} == {Op.EQ} then
-      if ({vm['k']}({vm['b']}) == {vm['k']}({vm['c']})) ~= ({vm['a']}~=0) then {vm['pc']}={vm['pc']}+1 end
-    elseif {vm['op']} == {Op.LT} then
-      if ({vm['k']}({vm['b']}) < {vm['k']}({vm['c']})) ~= ({vm['a']}~=0) then {vm['pc']}={vm['pc']}+1 end
-    elseif {vm['op']} == {Op.LE} then
-      if ({vm['k']}({vm['b']}) <= {vm['k']}({vm['c']})) ~= ({vm['a']}~=0) then {vm['pc']}={vm['pc']}+1 end
-    elseif {vm['op']} == {Op.TEST} then
-      if (not not {vm['stack']}[{vm['a']}]) == ({vm['c']}~=0) then {vm['pc']}={vm['pc']}+1 end
-    elseif {vm['op']} == {Op.TESTSET} then
-      if (not not {vm['stack']}[{vm['b']}]) == ({vm['c']}~=0) then
-        {vm['stack']}[{vm['a']}] = {vm['stack']}[{vm['b']}]
-      else
-        {vm['pc']} = {vm['pc']} + 1
-      end
-    elseif {vm['op']} == {Op.CALL} then
-      local {vm['func']} = {vm['stack']}[{vm['a']}]
-      local {vm['args']} = {{}}
-      for {vm['i']}=1,{vm['b']}-1 do {vm['args']}[{vm['i']}]={vm['stack']}[{vm['a']}+{vm['i']}] end
-      local {vm['results']} = {{{vm['func']}(table.unpack({vm['args']}))}}
-      for {vm['i']}=1,{vm['c']}-1 do {vm['stack']}[{vm['a']}+{vm['i']}-1]={vm['results']}[{vm['i']}] end
-    elseif {vm['op']} == {Op.TAILCALL} then
-      local {vm['func']} = {vm['stack']}[{vm['a']}]
-      local {vm['args']} = {{}}
-      for {vm['i']}=1,{vm['b']}-1 do {vm['args']}[{vm['i']}]={vm['stack']}[{vm['a']}+{vm['i']}] end
-      return {vm['func']}(table.unpack({vm['args']}))
-    elseif {vm['op']} == {Op.RETURN} then
-      if {vm['b']} == 1 then return end
-      local {vm['results']} = {{}}
-      for {vm['i']}=1,{vm['b']}-1 do {vm['results']}[{vm['i']}]={vm['stack']}[{vm['a']}+{vm['i']}-1] end
-      return table.unpack({vm['results']})
-    elseif {vm['op']} == {Op.FORPREP} then
-      {vm['stack']}[{vm['a']}] = {vm['stack']}[{vm['a']}] - {vm['stack']}[{vm['a']}+2]
-      {vm['pc']} = {vm['pc']} + {vm['sbx']}
-    elseif {vm['op']} == {Op.FORLOOP} then
-      {vm['stack']}[{vm['a']}] = {vm['stack']}[{vm['a']}] + {vm['stack']}[{vm['a']}+2]
-      if {vm['stack']}[{vm['a']}+2] > 0 then
-        if {vm['stack']}[{vm['a']}] <= {vm['stack']}[{vm['a']}+1] then
-          {vm['pc']} = {vm['pc']} + {vm['sbx']}
-          {vm['stack']}[{vm['a']}+3] = {vm['stack']}[{vm['a']}]
-        end
-      else
-        if {vm['stack']}[{vm['a']}] >= {vm['stack']}[{vm['a']}+1] then
-          {vm['pc']} = {vm['pc']} + {vm['sbx']}
-          {vm['stack']}[{vm['a']}+3] = {vm['stack']}[{vm['a']}]
-        end
-      end
-    elseif {vm['op']} == {Op.TFORLOOP} then
-      local {vm['func']}={vm['stack']}[{vm['a']}]
-      local {vm['results']}={{{vm['func']}({vm['stack']}[{vm['a']}+1],{vm['stack']}[{vm['a']}+2])}}
-      if {vm['results']}[1]~=nil then
-        {vm['stack']}[{vm['a']}+2]={vm['results']}[1]
-        for {vm['i']}=1,{vm['c']} do {vm['stack']}[{vm['a']}+2+{vm['i']}]={vm['results']}[{vm['i']}] end
-      else
-        {vm['pc']}={vm['pc']}+1
-      end
-    elseif {vm['op']} == {Op.CLOSURE} then
-      local {vm['top']}={vm['protos']}[{vm['bx']}+1]
-      {vm['stack']}[{vm['a']}]=function(...)
-        return {vm['execute']}({vm['top']},{vm['env']},...)
-      end
-    elseif {vm['op']} == {Op.SELF} then
-      {vm['stack']}[{vm['a']}+1]={vm['stack']}[{vm['b']}]
-      {vm['stack']}[{vm['a']}]={vm['stack']}[{vm['b']}][{vm['k']}({vm['c']})]
-    elseif {vm['op']} == {Op.SETLIST} then
-      for {vm['i']}=1,{vm['b']} do
-        {vm['stack']}[{vm['a']}][({vm['c']}-1)*50+{vm['i']}]={vm['stack']}[{vm['a']}+{vm['i']}]
-      end
-    elseif {vm['op']} == {Op.VARARG} then
-      local {vm['top']}={vm['stack']}[0] or {{}}
-      for {vm['i']}=1,{vm['b']}-1 do {vm['stack']}[{vm['a']}+{vm['i']}-1]={vm['top']}[{vm['proto']}.{vm['params']}+{vm['i']}] end
-    end
-  end
-end
--- [[ BYTECODE ]]
-local {vm['proto']} = {bytecode}
--- [[ ENTRY POINT ]]
-local {vm['func']} = function(...)
-  return {vm['execute']}({vm['proto']}, getfenv and getfenv() or _G, ...)
-end
-{vm['func']}()
-"""
-    return lua_vm
+    reset_names()
+
+    op2c, c2op = make_opcode_map()
+    remap_proto(proto, op2c)
+
+    um_parts = [f"[{obf_number(s)}]={obf_number(o)}" for s, o in c2op.items()]
+    um_str   = '{' + ','.join(um_parts) + '}'
+    proto_str = serialize_proto(proto)
+
+    def opc(name):
+        return obf_number(op2c[getattr(Op, name)])
+
+    vUM    = obfuscate_name()
+    vPR    = obfuscate_name()
+    vVM    = obfuscate_name()
+    vF     = obfuscate_name()
+    vST    = obfuscate_name()
+    vEN    = obfuscate_name()
+    vUV    = obfuscate_name()
+    vPC    = obfuscate_name()
+    vIN    = obfuscate_name()
+    vOP    = obfuscate_name()
+    vAR    = obfuscate_name()
+    vSCOPE = obfuscate_name()
+    vSET_L = obfuscate_name()
+    vGET_L = obfuscate_name()
+    vBIT   = obfuscate_name()
+    vEntry = obfuscate_name()
+    vK     = obfuscate_name()
+    vN     = obfuscate_name()
+
+    def pop():   return f"table.remove({vST})"
+    def push(v): return f"{vST}[#{vST}+1]={v}"
+    def top():   return f"{vST}[#{vST}]"
+
+    def arith(opname, sym):
+        va, vb = obfuscate_name(), obfuscate_name()
+        return f"    elseif {vOP}=={opc(opname)} then local {vb}={pop()};local {va}={pop()};{push(f'{va}{sym}{vb}')}"
+
+    def arith_fn(opname, fn):
+        va, vb = obfuscate_name(), obfuscate_name()
+        return f"    elseif {vOP}=={opc(opname)} then local {vb}={pop()};local {va}={pop()};{push(f'{vBIT}.{fn}({va},{vb})')}"
+
+    def unary(opname, sym):
+        va = obfuscate_name()
+        return f"    elseif {vOP}=={opc(opname)} then local {va}={pop()};{push(f'{sym}{va}')}"
+
+    def unary_fn(opname, fn):
+        va = obfuscate_name()
+        return f"    elseif {vOP}=={opc(opname)} then local {va}={pop()};{push(f'{vBIT}.{fn}({va})')}"
+
+    def cmp(opname, sym):
+        va, vb = obfuscate_name(), obfuscate_name()
+        return f"    elseif {vOP}=={opc(opname)} then local {vb}={pop()};local {va}={pop()};{push(f'({va}{sym}{vb})')}"
+
+    vv1=obfuscate_name(); vv2=obfuscate_name(); vv3=obfuscate_name()
+    vs1=obfuscate_name(); vs2=obfuscate_name()
+    vsl=obfuscate_name(); vsg=obfuscate_name()
+    vgt_k=obfuscate_name(); vgt_t=obfuscate_name()
+    vst_v=obfuscate_name(); vst_k=obfuscate_name(); vst_t=obfuscate_name()
+    vgf_t=obfuscate_name()
+    vsf_v=obfuscate_name(); vsf_t=obfuscate_name()
+    vls_v=obfuscate_name(); vls_t=obfuscate_name()
+    vajmp=obfuscate_name(); vojmp=obfuscate_name()
+    vjf=obfuscate_name(); vjt=obfuscate_name()
+    vfn=obfuscate_name(); vargs=obfuscate_name(); vres=obfuscate_name()
+    vci=obfuscate_name(); vci2=obfuscate_name()
+    vrv=obfuscate_name(); vri=obfuscate_name()
+    vcls=obfuscate_name(); vcenv=obfuscate_name()
+    vidiv_a=obfuscate_name(); vidiv_b=obfuscate_name()
+    vfp_st=obfuscate_name(); vfp_lim=obfuscate_name(); vfp_stp=obfuscate_name()
+    vfl_stp=obfuscate_name(); vfl_lim=obfuscate_name(); vfl_v=obfuscate_name()
+    vgfp_c=obfuscate_name(); vgfp_s=obfuscate_name(); vgfp_i=obfuscate_name()
+    vgfl_c=obfuscate_name(); vgfl_s=obfuscate_name(); vgfl_i=obfuscate_name()
+    vgfl_r=obfuscate_name(); vgfl_j=obfuscate_name()
+
+    lines = []
+    def L(s): lines.append(s)
+
+    L("(function()")
+    L(f"local {vUM}={um_str}")
+    L(f"local {vPR}={proto_str}")
+
+    # Lua5.1/Luau compatible bit helpers
+    L(f"local {vBIT}={{}}")
+    L("do")
+    L("  local function _and(a,b) local r=0;for i=0,31 do if math.floor(a/2^i)%2==1 and math.floor(b/2^i)%2==1 then r=r+2^i end end;return r end")
+    L("  local function _or(a,b)  local r=0;for i=0,31 do if math.floor(a/2^i)%2==1 or  math.floor(b/2^i)%2==1 then r=r+2^i end end;return r end")
+    L("  local function _xor(a,b) local r=0;for i=0,31 do local x=math.floor(a/2^i)%2;local y=math.floor(b/2^i)%2;if x~=y then r=r+2^i end end;return r end")
+    L("  local function _not(a)   local r=0;for i=0,31 do if math.floor(a/2^i)%2==0 then r=r+2^i end end;return r end")
+    L("  local function _shl(a,b) return math.floor(a*(2^b))%4294967296 end")
+    L("  local function _shr(a,b) return math.floor(a/(2^b)) end")
+    L(f"  {vBIT}.band=_and;{vBIT}.bor=_or;{vBIT}.bxor=_xor;{vBIT}.bnot=_not;{vBIT}.shl=_shl;{vBIT}.shr=_shr")
+    L("end")
+
+    L(f"local {vVM}")
+    L(f"{vVM}=function({vF},{vST},{vEN},{vUV})")
+    L(f"  {vST}={vST} or {{}}")
+    L(f"  {vEN}={vEN} or _G")
+    L(f"  {vUV}={vUV} or {{}}")
+    L(f"  local {vK}={vF}.k")
+    L(f"  local {vN}={vF}.n")
+    L(f"  local {vPC}=1")
+    L(f"  local {vSCOPE}={{{{}}}}")
+    L(f"  local function {vSET_L}(nm,val)")
+    L(f"    for _i=#{vSCOPE},1,-1 do if {vSCOPE}[_i][nm]~=nil then {vSCOPE}[_i][nm]=val;return end end")
+    L(f"    {vSCOPE}[#{vSCOPE}][nm]=val")
+    L( "  end")
+    L(f"  local function {vGET_L}(nm)")
+    L(f"    for _i=#{vSCOPE},1,-1 do local v={vSCOPE}[_i][nm];if v~=nil then return v end end")
+    L( "  end")
+    L( "  while true do")
+    L(f"    local {vIN}={vF}.c[{vPC}]")
+    L(f"    if not {vIN} then break end")
+    L(f"    local {vOP}={vUM}[{vIN}[1]]")
+    L(f"    local {vAR}={vIN}[2]")
+    L(f"    {vPC}={vPC}+1")
+
+    L(f"    if     {vOP}=={opc('PUSH_NIL')}    then {push('nil')}")
+    L(f"    elseif {vOP}=={opc('PUSH_TRUE')}   then {push('true')}")
+    L(f"    elseif {vOP}=={opc('PUSH_FALSE')}  then {push('false')}")
+    L(f"    elseif {vOP}=={opc('PUSH_NUM')}    then {push(f'{vK}[{vAR}+1]')}")
+    L(f"    elseif {vOP}=={opc('PUSH_STR')}    then {push(f'{vK}[{vAR}+1]')}")
+    L(f"    elseif {vOP}=={opc('PUSH_VARARG')} then -- vararg noop")
+    L(f"    elseif {vOP}=={opc('PUSH_VAR')}    then local {vv1}={vGET_L}({vN}[{vAR}+1]);{push(vv1)}")
+    L(f"    elseif {vOP}=={opc('PUSH_GLOBAL')} then local {vv2}={vEN}[{vN}[{vAR}+1]];{push(vv2)}")
+    L(f"    elseif {vOP}=={opc('POP')}         then {pop()}")
+    L(f"    elseif {vOP}=={opc('DUP')}         then local {vv3}={top()};{push(vv3)}")
+    L(f"    elseif {vOP}=={opc('SWAP')}        then local {vs1}={pop()};local {vs2}={pop()};{push(vs1)};{push(vs2)}")
+    L(f"    elseif {vOP}=={opc('ADJUST')}      then while #{vST}<{vAR} do {push('nil')} end;while #{vST}>{vAR} do {pop()} end")
+    L(f"    elseif {vOP}=={opc('SET_LOCAL')}   then local {vsl}={pop()};{vSET_L}({vN}[{vAR}+1],{vsl})")
+    L(f"    elseif {vOP}=={opc('SET_GLOBAL')}  then local {vsg}={pop()};{vEN}[{vN}[{vAR}+1]]={vsg}")
+    L(f"    elseif {vOP}=={opc('NEW_TABLE')}   then {push('{}')}")
+    L(f"    elseif {vOP}=={opc('GET_TABLE')}   then local {vgt_k}={pop()};local {vgt_t}={pop()};{push(f'{vgt_t}[{vgt_k}]')}")
+    L(f"    elseif {vOP}=={opc('SET_TABLE')}   then local {vst_v}={pop()};local {vst_k}={pop()};local {vst_t}={pop()};{vst_t}[{vst_k}]={vst_v}")
+    L(f"    elseif {vOP}=={opc('GET_FIELD')}   then local {vgf_t}={pop()};{push(f'{vgf_t}[{vN}[{vAR}+1]]')}")
+    L(f"    elseif {vOP}=={opc('SET_FIELD')}   then local {vsf_v}={pop()};local {vsf_t}={pop()};{vsf_t}[{vN}[{vAR}+1]]={vsf_v}")
+    L(f"    elseif {vOP}=={opc('SETLIST')}     then local {vls_v}={pop()};local {vls_t}={vST}[#{vST}];{vls_t}[{vAR}]={vls_v}")
+
+    L(arith('ADD', '+'))
+    L(arith('SUB', '-'))
+    L(arith('MUL', '*'))
+    L(arith('DIV', '/'))
+    L(arith('MOD', '%'))
+    L(arith('POW', '^'))
+    L(f"    elseif {vOP}=={opc('IDIV')} then local {vidiv_b}={pop()};local {vidiv_a}={pop()};{push(f'math.floor({vidiv_a}/{vidiv_b})')}")
+    L(arith_fn('BAND', 'band'))
+    L(arith_fn('BOR',  'bor'))
+    L(arith_fn('BXOR', 'bxor'))
+    L(arith_fn('SHL',  'shl'))
+    L(arith_fn('SHR',  'shr'))
+    L(arith('CONCAT', '..'))
+    L(unary('UNM',  '-'))
+    L(unary('NOT',  'not '))
+    L(unary('LEN',  '#'))
+    L(unary_fn('BNOT', 'bnot'))
+    L(cmp('EQ',  '=='))
+    L(cmp('NEQ', '~='))
+    L(cmp('LT',  '<'))
+    L(cmp('GT',  '>'))
+    L(cmp('LEQ', '<='))
+    L(cmp('GEQ', '>='))
+
+    L(f"    elseif {vOP}=={opc('AND_JMP')} then local {vajmp}={top()};if not {vajmp} then {vPC}={vPC}+{vAR};{push(vajmp)} else {pop()} end")
+    L(f"    elseif {vOP}=={opc('OR_JMP')}  then local {vojmp}={top()};if {vojmp} then {vPC}={vPC}+{vAR};{push(vojmp)} else {pop()} end")
+    L(f"    elseif {vOP}=={opc('JMP')}       then {vPC}={vPC}+{vAR}")
+    L(f"    elseif {vOP}=={opc('JMP_FALSE')} then local {vjf}={pop()};if not {vjf} then {vPC}={vPC}+{vAR} end")
+    L(f"    elseif {vOP}=={opc('JMP_TRUE')}  then local {vjt}={pop()};if {vjt} then {vPC}={vPC}+{vAR} end")
+
+    L(f"    elseif {vOP}=={opc('CALL')} then")
+    L(f"      local {vargs}={{}}")
+    L(f"      for {vci}=1,{vAR} do table.insert({vargs},1,{pop()}) end")
+    L(f"      local {vfn}={pop()}")
+    L(f"      local {vres}={{{vfn}(table.unpack and table.unpack({vargs}) or unpack({vargs}))}}")
+    L(f"      for {vci2}=1,#{vres} do {push(f'{vres}[{vci2}]')} end")
+
+    L(f"    elseif {vOP}=={opc('TAILCALL')} then")
+    L(f"      local {vargs}={{}}")
+    L(f"      for {vci}=1,{vAR} do table.insert({vargs},1,{pop()}) end")
+    L(f"      local {vfn}={pop()}")
+    L(f"      return {vfn}(table.unpack and table.unpack({vargs}) or unpack({vargs}))")
+
+    L(f"    elseif {vOP}=={opc('RETURN')} then")
+    L(f"      local {vrv}={{}}")
+    L(f"      for {vri}=1,{vAR} do table.insert({vrv},1,{pop()}) end")
+    L(f"      return table.unpack and table.unpack({vrv}) or unpack({vrv})")
+
+    L(f"    elseif {vOP}=={opc('CLOSURE')} then")
+    L(f"      local {vcls}={vF}.f[{vAR}+1]")
+    L(f"      local {vcenv}={vEN}")
+    L(f"      {push(f'(function(...) return {vVM}({vcls},{{}},{vcenv},{{}}) end)')}")
+
+    L(f"    elseif {vOP}=={opc('ENTER_SCOPE')} then {vSCOPE}[#{vSCOPE}+1]={{}}")
+    L(f"    elseif {vOP}=={opc('LEAVE_SCOPE')} then {vSCOPE}[#{vSCOPE}]=nil")
+
+    L(f"    elseif {vOP}=={opc('FORPREP')} then")
+    L(f"      local {vfp_stp}={pop()};local {vfp_lim}={pop()};local {vfp_st}={pop()}")
+    L(f"      {push(vfp_st)};{push(vfp_lim)};{push(vfp_stp)}")
+    L(f"      if ({vfp_stp}>0 and {vfp_st}>{vfp_lim}) or ({vfp_stp}<=0 and {vfp_st}<{vfp_lim}) then {vPC}={vPC}+{vAR} end")
+
+    L(f"    elseif {vOP}=={opc('FORLOOP')} then")
+    L(f"      local {vfl_stp}={vST}[#{vST}];local {vfl_lim}={vST}[#{vST}-1];local {vfl_v}={vST}[#{vST}-2]")
+    L(f"      {vfl_v}={vfl_v}+{vfl_stp};{vST}[#{vST}-2]={vfl_v}")
+    L(f"      if ({vfl_stp}>0 and {vfl_v}<={vfl_lim}) or ({vfl_stp}<=0 and {vfl_v}>={vfl_lim}) then {vPC}={vPC}+{vAR} end")
+
+    L(f"    elseif {vOP}=={opc('GFORPREP')} then")
+    L(f"      local {vgfp_c}={pop()};local {vgfp_s}={pop()};local {vgfp_i}={pop()}")
+    L(f"      {push(vgfp_i)};{push(vgfp_s)};{push(vgfp_c)}")
+
+    L(f"    elseif {vOP}=={opc('GFORLOOP')} then")
+    L(f"      local {vgfl_c}={vST}[#{vST}];local {vgfl_s}={vST}[#{vST}-1];local {vgfl_i}={vST}[#{vST}-2]")
+    L(f"      local {vgfl_r}={{{vgfl_i}({vgfl_s},{vgfl_c})}}")
+    L(f"      if {vgfl_r}[1]~=nil then")
+    L(f"        {vST}[#{vST}]={vgfl_r}[1]")
+    L(f"        for {vgfl_j}=#{vgfl_r},1,-1 do {push(f'{vgfl_r}[{vgfl_j}]')} end")
+    L(f"        {vPC}={vPC}+{vAR}")
+    L( "      end")
+
+    L( "    end")
+    L( "  end")
+    L( "end")
+
+    L(f"local {vEntry}=function()")
+    L(f"  {vVM}({vPR},{{}},_G,{{}})")
+    L( "end")
+    L(f"{vEntry}()")
+    L( "end)()")
+
+    return '\n'.join(lines)
