@@ -4,7 +4,7 @@ Compiles Lua AST to custom bytecode, then wraps it in a Lua VM interpreter.
 """
 import random
 import string
-from .parser import *
+from parser import *  # 修正: from .parser import * -> from parser import *
 
 # Opcodes
 class Op:
