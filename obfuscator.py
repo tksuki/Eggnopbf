@@ -2,8 +2,8 @@
 Main obfuscation pipeline - ties together all passes
 """
 from lexer import Lexer, LexerError
-from parser import Parser
-from vm import VM
+from parser import Parser, ParseError
+from vm import Compiler, generate_vm_lua
 
 class ObfuscationError(Exception):
     pass
@@ -19,9 +19,6 @@ def obfuscate(source: str, options: dict = None) -> str:
     """
     if options is None:
         options = {}
-
-    add_dead_code = options.get('dead_code', True)
-    add_watermark = options.get('watermark', True)
 
     try:
         lexer = Lexer(source)
@@ -42,13 +39,8 @@ def obfuscate(source: str, options: dict = None) -> str:
         raise ObfuscationError(f"Compiler error: {e}")
 
     try:
-        lua_vm = generate_vm_lua(proto)
+        result = generate_vm_lua(proto)
     except Exception as e:
         raise ObfuscationError(f"VM generation error: {e}")
-
-    try:
-        result = post_process(lua_vm, add_dead=add_dead_code, add_wm=add_watermark)
-    except Exception as e:
-        raise ObfuscationError(f"Post-processing error: {e}")
 
     return result
